@@ -205,10 +205,6 @@ ggdendrogram(shot_complete_hclust, labels = F, leaf_labels = F,
 
 
 
-#wnba_complete_hclust <- 
-#  hclust(avg_pts_distance, method = "complete")
-
-
 
 ```
 
