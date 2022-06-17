@@ -221,7 +221,7 @@ shot_minimax <- protoclust(shot_type_dist)
 minimax_shot_clusters <- protocut(shot_minimax, k = 3)
 
 avg_pts_distance %>%
-  mutate(shot_clusters = 
+  mutate(shot_clusters =
            as.factor(minimax_shot_clusters$cl)) %>%
   ggplot(aes(x = avg_dist, y = avg_pts, color = shot_clusters)) + 
   geom_point(alpha = .6) + 
