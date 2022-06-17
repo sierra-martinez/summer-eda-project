@@ -1,0 +1,232 @@
+---
+title: "WNBA Shots"
+output: html_document
+date: '2022-06-13'
+---
+
+##Load-in Libraries
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(wehoop)
+library(tidyverse)
+library(hexbin)
+library(patchwork)
+library(flexclust)
+library(seriation)
+library(ggdendro)
+library(protoclust)
+```
+
+## Load-in Data and change a few things
+
+```{r cars}
+wnba_pbp_data <- load_wnba_pbp(2022)
+
+wnba_shots_data <- wnba_pbp_data %>%
+  filter(shooting_play)
+
+wnba_shots_data <- wnba_shots_data %>%
+  dplyr::select(-shooting_play, -id, -participants_2_athlete_id,
+                -type_abbreviation, -season, -season_type, 
+                -home_team_spread, -game_spread, -home_favorite)
+
+write_csv(wnba_shots_data, 
+          "Data/wnba_shots_2022.csv")
+
+wnba_shots_data <- wnba_shots_data %>%
+     mutate(shot_type = case_when(grepl("Layup", type_text, fixed = TRUE) ~ "Layup",
+                                  grepl("Jump Shot", type_text, fixed = TRUE) ~ "Jump Shot",
+                                  grepl("Free Throw", type_text, fixed = TRUE) ~ "Free Throw",
+                                  grepl("Tip Shot", type_text, fixed = TRUE) ~ "Tip Shot",
+                                  grepl("Hook", type_text, fixed = TRUE) ~ "Hook Shot",
+                                  grepl("Dunk", type_text, fixed = TRUE) ~ "Dunk"))
+
+#Create shot_distance
+wnba_shots_data <- wnba_shots_data %>%
+  mutate(shot_distance = sqrt((coordinate_x - 25)^2 + (coordinate_y)^2))
+wnba_shots_data
+
+avg_pts_distance <- wnba_shots_data %>%
+  group_by(type_text) %>%
+  filter(coordinate_x >= 0,
+         coordinate_y >= 0) %>%
+  summarise(n = n(), 
+            avg_pts = mean(score_value),
+            avg_dist = mean(shot_distance)) %>%
+  filter(n >= 50) %>%
+  arrange(desc(avg_pts))
+
+
+
+
+```
+
+## Filter Out Negative Coordinates (From Freethrows)
+
+```{r pressure, echo=FALSE}
+
+wnba_shots_data <- wnba_shots_data %>%
+  filter(coordinate_x >= 0,
+         coordinate_y >= 0)
+wnba_shots_data
+
+```
+
+## Create Hex Plot
+
+```{r}
+
+#All shots (made and not made) -----------------------------------------------
+
+allShots <- wnba_shots_data %>%
+  ggplot(aes(x = coordinate_x, y = coordinate_y)) +
+  geom_hex(binwidth = c(2,2)) + 
+  scale_fill_gradient(low = "darkblue", high = "darkorange") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(x = "X Coordinate (ft)", y = "Y Coordinate (ft)",
+       fill = "Baskets Shot") + 
+  ylim(min = -1, max = 70) + 
+  coord_equal()
+allShots
+
+
+#Only shots made -------------------------------------------------------------
+
+madeShots <- wnba_shots_data %>%
+  filter(scoring_play == T) %>%
+  ggplot(aes(x = coordinate_x, y = coordinate_y)) +
+  geom_hex(binwidth = c(2,2)) + 
+  scale_fill_gradient(low = "darkblue", high = "darkorange") +
+  theme_minimal() +
+  theme(legend.position = "bottom") + 
+  labs(x = "X Coordinate (ft)", y = "",
+       fill = "Baskets Made") + 
+  ylim(min = -1, max = 70) +
+  coord_equal()
+madeShots
+
+#Display side by side --------------------------------------------------------
+allShots + madeShots + 
+  plot_annotation(title = 'Shots are made and taken from under the basket the most')
+
+```
+
+
+## Hierarchical Cluster (thru complete linkage)
+
+```{r}
+
+#Standardize avg_dist and avg_pts
+avg_pts_distance <- avg_pts_distance %>%
+  mutate(std_avg_dist = as.numeric(scale(avg_dist)),
+         std_avg_pts = as.numeric(scale(avg_pts))) 
+# avg_pts_distance %>%
+#   ggplot(aes(x = std_avg_dist, y = std_avg_pts)) + 
+#   geom_point(alpha = .7) + 
+#   theme_minimal()
+avg_pts_distance %>%
+  ggplot(aes(x = avg_dist, y = avg_pts)) + 
+  geom_point(alpha = .7) +
+  theme_minimal()
+
+
+shot_type_dist <- dist(dplyr::select(avg_pts_distance,
+                                  std_avg_dist, std_avg_pts))
+shot_dist_matrix <- as.matrix(shot_type_dist) #shows redundancies
+rownames(shot_dist_matrix) <- avg_pts_distance$type_text
+colnames(shot_dist_matrix) <- avg_pts_distance$type_text
+shot_dist_matrix[1:3,1:3] #previews
+
+long_dist_matrix <- 
+  as_tibble(shot_dist_matrix) %>%
+  mutate(shot1 = rownames(shot_dist_matrix)) %>%
+  pivot_longer(cols = -shot1,
+               names_to = "shot2", values_to = "distance")
+long_dist_matrix %>% 
+  ggplot(aes(x = shot1, y = shot2, fill = distance)) + 
+  geom_tile() + 
+  theme_bw() + 
+  theme(axis.text = element_blank(),
+        axis.ticks =  element_blank(),
+        legend.position = "bottom") + 
+  scale_fill_gradient(low = "darkorange", high = "darkblue")
+
+
+
+
+#Optimally rearrange above
+shot_dist_seriate <- seriate(shot_type_dist)
+shot_order <- get_order(shot_dist_seriate)
+
+shot_dist_order <- 
+  avg_pts_distance$type_text[shot_order]
+
+long_dist_matrix %>% 
+  mutate(shot1 = fct_relevel(shot1, shot_dist_order),
+         shot2 = fct_relevel(shot2, shot_dist_order)) %>%
+  ggplot(aes(x = shot1, y = shot2, fill = distance)) + 
+  geom_tile() + 
+  theme_bw() + 
+  theme(axis.text = element_blank(),
+        axis.ticks =  element_blank(),
+        legend.position = "bottom") + 
+  scale_fill_gradient(low = "darkorange", high = "darkblue")
+
+
+#Start using hclust -----------------------------------------------------------
+
+shot_complete_hclust <- 
+  hclust(shot_type_dist, method = "complete")
+
+avg_pts_distance %>%
+  mutate(player_cluster = 
+           as.factor(cutree(shot_complete_hclust, k = 3))) %>%
+  ggplot(aes(x = avg_dist, y = avg_pts, color = player_cluster)) + 
+  geom_point(alpha = .6) + 
+  ggthemes::scale_color_colorblind() + 
+  theme_bw() + 
+  theme(legend.position = "bottom")
+
+plot(shot_complete_hclust) #bad to look at
+
+ggdendrogram(shot_complete_hclust, labels = F, leaf_labels = F,
+             theme_dendro = F) + 
+  labs(y = "Dissimilarity between clusters") + 
+  theme_bw() + 
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank()) + 
+  geom_hline(yintercept = 3, linetype = "dashed", color = "darkred") + 
+  geom_hline(yintercept = 1.5, linetype = "dashed", color = "darkred")
+
+
+
+#wnba_complete_hclust <- 
+#  hclust(avg_pts_distance, method = "complete")
+
+
+
+```
+
+
+Hierarchical Cluster (with minimax linkage)
+
+``` {r}
+shot_minimax <- protoclust(shot_type_dist)
+
+minimax_shot_clusters <- protocut(shot_minimax, k = 3)
+
+avg_pts_distance %>%
+  mutate(shot_clusters = 
+           as.factor(minimax_shot_clusters$cl)) %>%
+  ggplot(aes(x = avg_dist, y = avg_pts, color = shot_clusters)) + 
+  geom_point(alpha = .6) + 
+  ggthemes::scale_color_colorblind() + 
+  theme_minimal() + 
+  theme(legend.position = "bottom")
+
+```
